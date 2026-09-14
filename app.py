@@ -1,6 +1,7 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from google.auth.transport.requests import Request as GoogleAuthRequest
 import requests
 import json
 import numpy as np
@@ -161,12 +162,37 @@ st.markdown(
 )
 
 
-# ===== Google Sheets 連線 =====
+# ===== Google 憑證（Sheets 跟 Drive 共用同一組） =====
+@st.cache_resource
+def get_credentials():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+
+
 @st.cache_resource
 def get_gspread_client():
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    return gspread.authorize(creds)
+    return gspread.authorize(get_credentials())
+
+
+def get_drive_access_token():
+    creds = get_credentials()
+    if not creds.valid:
+        creds.refresh(GoogleAuthRequest())
+    return creds.token
+
+
+@st.cache_data(ttl=3600)
+def fetch_drive_image_bytes(file_id):
+    """直接透過Drive API把照片內容抓下來，比公開連結embed穩定"""
+    try:
+        token = get_drive_access_token()
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        if resp.status_code == 200:
+            return resp.content
+    except Exception:
+        pass
+    return None
 
 
 @st.cache_data(ttl=60)
@@ -184,26 +210,77 @@ def load_misc_data():
     return df
 
 
-def update_manual_tag(row_number, new_tag):
+def update_manual_tag(row_numbers, new_tag):
+    """同一群組的所有列都寫入同一個手動標籤，維持同步"""
     client = get_gspread_client()
     sh = client.open_by_key(SHEET_ID)
     ws = sh.worksheet(MISC_SHEET_NAME)
     headers = ws.row_values(1)
     col_index = headers.index("手動標籤") + 1
-    ws.update_cell(row_number, col_index, new_tag)
+    for row_number in row_numbers:
+        ws.update_cell(row_number, col_index, new_tag)
+
+
+def build_group_entries(df):
+    """把同一個群組ID的多列，合併成一張卡片要顯示的內容
+    （例如照片跟你事後補的文字說明，本來是分開兩列）"""
+    groups = {}
+    order = []
+    for _, row in df.iterrows():
+        gid = row.get("群組ID") or f"_solo_{row['_row_number']}"
+        if gid not in groups:
+            groups[gid] = []
+            order.append(gid)
+        groups[gid].append(row)
+
+    entries = []
+    for gid in order:
+        rows = groups[gid]
+        row_numbers = [int(r["_row_number"]) for r in rows]
+        times = [r.get("記錄時間", "") for r in rows if r.get("記錄時間")]
+        category = next((r.get("類別") for r in rows if r.get("類別")), "")
+        summary = next((r.get("AI摘要") for r in rows if r.get("AI摘要")), "")
+
+        contents = []
+        for r in rows:
+            c = (r.get("內容") or "").strip()
+            if c and c not in contents:
+                contents.append(c)
+
+        image_ids = []
+        for r in rows:
+            fid = extract_drive_file_id(r.get("照片連結"))
+            if fid and fid not in image_ids:
+                image_ids.append(fid)
+
+        ai_tags, manual_tags = [], []
+        for r in rows:
+            ai_tags += [t for t in (r.get("AI標籤") or "").split("、") if t]
+            manual_tags += [t for t in (r.get("手動標籤") or "").split("、") if t]
+        ai_tags = list(dict.fromkeys(ai_tags))
+        manual_tags = list(dict.fromkeys(manual_tags))
+
+        vector = next((r.get("向量") for r in rows if r.get("向量")), "")
+
+        entries.append({
+            "group_id": gid,
+            "row_numbers": row_numbers,
+            "time": min(times) if times else "",
+            "category": category,
+            "summary": summary,
+            "content": "\n\n".join(contents),
+            "image_ids": image_ids,
+            "ai_tags": ai_tags,
+            "manual_tags": manual_tags,
+            "vector": vector,
+        })
+    return entries
 
 
 # ===== 照片網址處理 =====
 def extract_drive_file_id(url):
     m = re.search(r"/d/([a-zA-Z0-9_-]+)", str(url) if url else "")
     return m.group(1) if m else None
-
-
-def drive_image_url(url):
-    file_id = extract_drive_file_id(url)
-    if not file_id:
-        return None
-    return f"https://drive.google.com/uc?export=view&id={file_id}"
 
 
 # ===== Gemini 向量化 / 搜尋 =====
@@ -233,11 +310,11 @@ def cosine_similarity(a, b):
     return float(np.dot(a, b) / denom)
 
 
-# ===== 顯示單則筆記卡片（搜尋跟瀏覽共用） =====
-def render_entry(row, show_score=None):
-    row_key = f"entry_{row['_row_number']}"
-    category = row.get("類別", "") or "未分類"
-    color = category_color(row.get("類別", ""))
+# ===== 顯示一張卡片（同一群組的照片+文字合併顯示） =====
+def render_entry(entry, show_score=None):
+    row_key = "entry_" + "_".join(str(n) for n in entry["row_numbers"])
+    category = entry["category"] or "未分類"
+    color = category_color(entry["category"])
 
     with st.container(border=True, key=row_key):
         score_html = (
@@ -249,13 +326,13 @@ def render_entry(row, show_score=None):
             f"""
             <div class="sb-card-head">
                 <span class="sb-chip" style="background:{color}22; color:{color};">{category}</span>
-                <span class="sb-time">{row.get('記錄時間', '')} {score_html}</span>
+                <span class="sb-time">{entry['time']} {score_html}</span>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        summary = row.get("AI摘要") or row.get("內容")
+        summary = entry["summary"] or entry["content"]
         if summary:
             st.markdown(f"<div class='sb-summary'>{summary}</div>", unsafe_allow_html=True)
         else:
@@ -264,26 +341,33 @@ def render_entry(row, show_score=None):
                 unsafe_allow_html=True,
             )
 
-        img_url = drive_image_url(row.get("照片連結"))
-        if img_url:
-            st.image(img_url, width=320)
+        for file_id in entry["image_ids"]:
+            image_bytes = fetch_drive_image_bytes(file_id)
+            if image_bytes:
+                st.image(image_bytes, width=320)
+            else:
+                st.markdown(
+                    f"<div class='sb-empty'>照片載入失敗，"
+                    f"<a href='https://drive.google.com/file/d/{file_id}/view' target='_blank' "
+                    f"style='color:{ACCENT};'>點此在雲端硬碟開啟</a></div>",
+                    unsafe_allow_html=True,
+                )
 
-        ai_tags = row.get("AI標籤", "")
-        manual_tags = row.get("手動標籤", "")
-        all_tags = [t for t in (ai_tags.split("、") + manual_tags.split("、")) if t]
+        all_tags = entry["ai_tags"] + entry["manual_tags"]
         if all_tags:
             tags_html = "".join(f"<span class='sb-tag'>{t}</span>" for t in all_tags)
             st.markdown(f"<div class='sb-tags'>{tags_html}</div>", unsafe_allow_html=True)
 
+        manual_tags_str = "、".join(entry["manual_tags"])
         with st.expander("查看完整內容 / 補標籤"):
-            st.write(row.get("內容", "") or "（沒有文字內容）")
+            st.write(entry["content"] or "（沒有文字內容）")
             new_tag = st.text_input(
                 "補充手動標籤（用、分隔多個）",
-                value=manual_tags,
-                key=f"tag_input_{row['_row_number']}",
+                value=manual_tags_str,
+                key=f"tag_input_{row_key}",
             )
-            if st.button("儲存標籤", key=f"save_btn_{row['_row_number']}"):
-                update_manual_tag(int(row["_row_number"]), new_tag)
+            if st.button("儲存標籤", key=f"save_btn_{row_key}"):
+                update_manual_tag(entry["row_numbers"], new_tag)
                 st.success("已更新，重新整理後會看到")
                 load_misc_data.clear()
 
@@ -314,6 +398,8 @@ if df.empty:
     st.info("雜記收件匣目前沒有資料，先去 LINE 傳幾則記錄看看吧！")
     st.stop()
 
+entries = build_group_entries(df)
+
 tab_search, tab_browse = st.tabs(["搜尋", "瀏覽"])
 
 with tab_search:
@@ -332,8 +418,8 @@ with tab_search:
 
                 if query_vec:
                     scored = []
-                    for _, row in df.iterrows():
-                        vec_str = row.get("向量", "")
+                    for entry in entries:
+                        vec_str = entry["vector"]
                         if not vec_str:
                             continue
                         try:
@@ -341,7 +427,7 @@ with tab_search:
                         except Exception:
                             continue
                         score = cosine_similarity(query_vec, vec)
-                        scored.append((score, row))
+                        scored.append((score, entry))
 
                     scored.sort(key=lambda x: x[0], reverse=True)
                     top = scored[:10]
@@ -349,17 +435,17 @@ with tab_search:
                     if not top:
                         st.info("目前還沒有已經整理好的資料可以搜尋（批次處理可能還沒跑過）")
                     else:
-                        for score, row in top:
-                            render_entry(row, show_score=score)
+                        for score, entry in top:
+                            render_entry(entry, show_score=score)
 
 with tab_browse:
-    categories = ["全部"] + sorted([c for c in df["類別"].dropna().unique() if c])
+    categories = ["全部"] + sorted({e["category"] for e in entries if e["category"]})
     selected_cat = st.selectbox("依類別篩選", categories)
 
-    filtered = df if selected_cat == "全部" else df[df["類別"] == selected_cat]
-    filtered = filtered.sort_values("記錄時間", ascending=False)
+    filtered = entries if selected_cat == "全部" else [e for e in entries if e["category"] == selected_cat]
+    filtered = sorted(filtered, key=lambda e: e["time"], reverse=True)
 
     st.caption(f"共 {len(filtered)} 則")
 
-    for _, row in filtered.iterrows():
-        render_entry(row)
+    for entry in filtered:
+        render_entry(entry)
