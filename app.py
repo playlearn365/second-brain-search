@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import re
 
-st.set_page_config(page_title="我的第二大腦", page_icon="🗂️", layout="wide")
+st.set_page_config(page_title="我的第二大腦", page_icon="◆", layout="wide")
 
 # ===== 基本設定 =====
 SHEET_ID = "1szgscKyTQ49LWlG3qFXWOSK8hjWuvek_oyb47rrTW3k"
@@ -20,14 +20,15 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# ===== 視覺主題：像一疊手寫索引卡片 =====
-INK = "#3A3226"
-INK_SOFT = "#8A7F6C"
-PAPER_BG = "#EDE6D6"
-CARD_BG = "#F7F2E7"
-LINE = "#D9CFB8"
+# ===== 視覺主題：冷色調、俐落 =====
+INK = "#E7EAF0"
+INK_SOFT = "#7C8698"
+PAPER_BG = "#12151B"
+CARD_BG = "#1B1F27"
+LINE = "#2A2F3B"
+ACCENT = "#5E85A6"
 
-CATEGORY_PALETTE = ["#5B6E4F", "#8C5B3F", "#4C6478", "#8A6A94", "#A9752F", "#5C7A76"]
+CATEGORY_PALETTE = ["#5E85A6", "#6C7A96", "#3F7068", "#6A6EA0", "#5C8B99", "#47607A"]
 
 
 def category_color(category):
@@ -40,10 +41,10 @@ def category_color(category):
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500&display=swap');
 
     html, body, [class*="css"] {{
-        font-family: 'Figtree', sans-serif;
+        font-family: 'IBM Plex Sans', sans-serif;
         color: {INK};
     }}
 
@@ -52,8 +53,9 @@ st.markdown(
     }}
 
     h1, h2, h3 {{
-        font-family: 'Fraunces', serif;
+        font-family: 'Space Grotesk', sans-serif;
         color: {INK};
+        letter-spacing: -0.01em;
     }}
 
     .sb-header {{
@@ -82,9 +84,10 @@ st.markdown(
     .sb-chip {{
         display: inline-block;
         padding: 0.15rem 0.6rem;
-        border-radius: 3px;
+        border-radius: 2px;
         font-size: 0.78rem;
         font-weight: 600;
+        font-family: 'Space Grotesk', sans-serif;
     }}
     .sb-time {{
         color: {INK_SOFT};
@@ -93,12 +96,12 @@ st.markdown(
     .sb-score {{
         color: {INK_SOFT};
         font-size: 0.82rem;
-        font-style: italic;
     }}
     .sb-summary {{
         font-size: 1.02rem;
         line-height: 1.55;
         margin-bottom: 0.5rem;
+        color: {INK};
     }}
     .sb-tags {{
         margin-top: 0.4rem;
@@ -108,7 +111,7 @@ st.markdown(
         border: 1px solid {LINE};
         color: {INK_SOFT};
         padding: 0.1rem 0.55rem;
-        border-radius: 999px;
+        border-radius: 2px;
         font-size: 0.78rem;
         margin-right: 0.35rem;
         margin-bottom: 0.3rem;
@@ -121,24 +124,25 @@ st.markdown(
     [data-testid="stVerticalBlockBorderWrapper"] {{
         background-color: {CARD_BG} !important;
         border: 1px solid {LINE} !important;
-        border-radius: 4px !important;
+        border-radius: 3px !important;
         box-shadow: none !important;
     }}
 
     .stTabs [data-baseweb="tab"] {{
-        font-family: 'Fraunces', serif;
+        font-family: 'Space Grotesk', sans-serif;
         font-size: 1.02rem;
     }}
 
     .stButton button {{
-        background-color: {INK};
-        color: {CARD_BG};
+        background-color: {ACCENT};
+        color: {PAPER_BG};
         border: none;
-        border-radius: 3px;
+        border-radius: 2px;
+        font-family: 'Space Grotesk', sans-serif;
     }}
     .stButton button:hover {{
-        background-color: {CATEGORY_PALETTE[1]};
-        color: {CARD_BG};
+        background-color: {INK};
+        color: {PAPER_BG};
     }}
 
     section[data-testid="stSidebar"] {{
@@ -287,7 +291,7 @@ def render_entry(row, show_score=None):
 # ===== 主畫面 =====
 st.markdown(
     """
-    <div class="sb-header"><h1>🗂️ 第二大腦</h1></div>
+    <div class="sb-header"><h1>第二大腦</h1></div>
     <div class="sb-subtitle">你隨手記下的一切，整理成找得到的樣子</div>
     """,
     unsafe_allow_html=True,
