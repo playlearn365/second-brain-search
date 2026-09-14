@@ -248,6 +248,9 @@ def delete_rows(row_numbers):
     ws = sh.worksheet(MISC_SHEET_NAME)
     for row_number in sorted(row_numbers, reverse=True):
         ws.delete_rows(row_number)
+
+
+def split_row_from_group(row_number):
     """把某一列從目前的群組裡拆出來，變成自己獨立一則，
     這樣就不會再跟其他不相關的內容顯示在同一張卡片上。
     同時清空舊的AI摘要等欄位，這樣下次批次處理會針對它自己重新整理，
@@ -523,9 +526,13 @@ with tab_search:
 
 with tab_browse:
     with st.expander("🔗 合併卡片（把重複或相關的幾張卡片合成一則）"):
+        keyword = st.text_input("先打關鍵字縮小範圍（可留空）", key="merge_keyword")
+
         options = {}
         for e in entries:
             label_text = e["summary"] or e["content"] or "（無內容）"
+            if keyword and keyword not in label_text and keyword not in (e["category"] or ""):
+                continue
             label = f"{e['time']}｜{label_text[:30]}"
             options[label] = e["group_id"]
 
