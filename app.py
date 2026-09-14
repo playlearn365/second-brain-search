@@ -221,6 +221,33 @@ def update_manual_tag(row_numbers, new_tag):
         ws.update_cell(row_number, col_index, new_tag)
 
 
+def delete_rows(row_numbers):
+    """刪除指定的列，從列號大到小刪，避免刪除過程中列號跑掉"""
+    client = get_gspread_client()
+    sh = client.open_by_key(SHEET_ID)
+    ws = sh.worksheet(MISC_SHEET_NAME)
+    for row_number in sorted(row_numbers, reverse=True):
+        ws.delete_rows(row_number)
+    """把某一列從目前的群組裡拆出來，變成自己獨立一則，
+    這樣就不會再跟其他不相關的內容顯示在同一張卡片上。
+    同時清空舊的AI摘要等欄位，這樣下次批次處理會針對它自己重新整理，
+    不會繼續沿用跟別人混在一起時產生的舊摘要。"""
+    client = get_gspread_client()
+    sh = client.open_by_key(SHEET_ID)
+    ws = sh.worksheet(MISC_SHEET_NAME)
+    headers = ws.row_values(1)
+    updates = {
+        "群組ID": f"solo_{row_number}",
+        "AI摘要": "",
+        "AI標籤": "",
+        "類別": "",
+        "向量": "",
+    }
+    for col_name, value in updates.items():
+        col_index = headers.index(col_name) + 1
+        ws.update_cell(row_number, col_index, value)
+
+
 def build_group_entries(df):
     """把同一個群組ID的多列，合併成一張卡片要顯示的內容
     （例如照片跟你事後補的文字說明，本來是分開兩列）"""
@@ -262,9 +289,20 @@ def build_group_entries(df):
 
         vector = next((r.get("向量") for r in rows if r.get("向量")), "")
 
+        raw_rows = [
+            {
+                "row_number": int(r["_row_number"]),
+                "content": (r.get("內容") or "").strip(),
+                "image_id": extract_drive_file_id(r.get("照片連結")),
+                "time": r.get("記錄時間", ""),
+            }
+            for r in rows
+        ]
+
         entries.append({
             "group_id": gid,
             "row_numbers": row_numbers,
+            "raw_rows": raw_rows,
             "time": min(times) if times else "",
             "category": category,
             "summary": summary,
@@ -369,6 +407,31 @@ def render_entry(entry, show_score=None):
             if st.button("儲存標籤", key=f"save_btn_{row_key}"):
                 update_manual_tag(entry["row_numbers"], new_tag)
                 st.success("已更新，重新整理後會看到")
+                load_misc_data.clear()
+
+            if len(entry["raw_rows"]) > 1:
+                st.markdown("---")
+                st.caption("這張卡片合併了以下幾則，如果有不相關的，可以把它拆出去或刪除：")
+                for raw in entry["raw_rows"]:
+                    preview = raw["content"] or ("（照片）" if raw["image_id"] else "（空白）")
+                    cols = st.columns([4, 1, 1])
+                    with cols[0]:
+                        st.write(f"{raw['time']}　{preview[:40]}")
+                    with cols[1]:
+                        if st.button("拆開", key=f"split_{raw['row_number']}"):
+                            split_row_from_group(raw["row_number"])
+                            st.success("已拆開，重新整理後會看到")
+                            load_misc_data.clear()
+                    with cols[2]:
+                        if st.button("刪除", key=f"del_row_{raw['row_number']}"):
+                            delete_rows([raw["row_number"]])
+                            st.success("已刪除，重新整理後會看到")
+                            load_misc_data.clear()
+
+            st.markdown("---")
+            if st.button("🗑️ 刪除整張卡片", key=f"del_group_{row_key}"):
+                delete_rows(entry["row_numbers"])
+                st.success("已刪除，重新整理後會看到")
                 load_misc_data.clear()
 
 
