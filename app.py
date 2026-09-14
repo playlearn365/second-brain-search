@@ -221,6 +221,26 @@ def update_manual_tag(row_numbers, new_tag):
         ws.update_cell(row_number, col_index, new_tag)
 
 
+def merge_rows(row_numbers):
+    """把指定的幾列統一成同一個群組ID，並清空舊的AI摘要等欄位，
+    讓下次批次處理針對合併後的完整內容重新生成一次摘要"""
+    client = get_gspread_client()
+    sh = client.open_by_key(SHEET_ID)
+    ws = sh.worksheet(MISC_SHEET_NAME)
+    headers = ws.row_values(1)
+    new_group_id = f"merged_{min(row_numbers)}"
+    col_map = {
+        name: headers.index(name) + 1
+        for name in ["群組ID", "AI摘要", "AI標籤", "類別", "向量"]
+    }
+    for row_number in row_numbers:
+        ws.update_cell(row_number, col_map["群組ID"], new_group_id)
+        ws.update_cell(row_number, col_map["AI摘要"], "")
+        ws.update_cell(row_number, col_map["AI標籤"], "")
+        ws.update_cell(row_number, col_map["類別"], "")
+        ws.update_cell(row_number, col_map["向量"], "")
+
+
 def delete_rows(row_numbers):
     """刪除指定的列，從列號大到小刪，避免刪除過程中列號跑掉"""
     client = get_gspread_client()
@@ -502,6 +522,25 @@ with tab_search:
                             render_entry(entry, show_score=score)
 
 with tab_browse:
+    with st.expander("🔗 合併卡片（把重複或相關的幾張卡片合成一則）"):
+        options = {}
+        for e in entries:
+            label_text = e["summary"] or e["content"] or "（無內容）"
+            label = f"{e['time']}｜{label_text[:30]}"
+            options[label] = e["group_id"]
+
+        selected_labels = st.multiselect("選擇要合併的卡片（至少2張）", list(options.keys()))
+        if st.button("合併選取的卡片"):
+            if len(selected_labels) < 2:
+                st.warning("至少要選2張才能合併")
+            else:
+                selected_gids = {options[label] for label in selected_labels}
+                selected_entries = [e for e in entries if e["group_id"] in selected_gids]
+                all_row_numbers = [rn for e in selected_entries for rn in e["row_numbers"]]
+                merge_rows(all_row_numbers)
+                st.success("已合併，重新整理後會看到（AI摘要會等下次批次處理重新生成）")
+                load_misc_data.clear()
+
     categories = ["全部"] + sorted({e["category"] for e in entries if e["category"]})
     selected_cat = st.selectbox("依類別篩選", categories)
 
