@@ -142,8 +142,14 @@ st.markdown(
     }}
 
     section[data-testid="stSidebar"] {{
-        background-color: {CARD_BG};
-        border-right: 1px solid {LINE};
+        background-color: {CARD_BG} !important;
+        border-right: 1px solid {LINE} !important;
+    }}
+    section[data-testid="stSidebar"] * {{
+        color: {INK} !important;
+    }}
+    section[data-testid="stSidebar"] input {{
+        background-color: {PAPER_BG} !important;
     }}
     </style>
     """,
